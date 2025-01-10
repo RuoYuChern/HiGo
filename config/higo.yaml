@@ -1,0 +1,12 @@
+port: 1080
+wsPort: 1021
+url: 
+slat: "c4c9aeb3-c511-4249-929a-01e2abc3e5fe"
+crt: "../config/go.askdao.top_bundle.crt"
+key: "../config/go.askdao.top.key"
+logger:
+    level: info
+    log_file: "../log/higo.log"
+    max_size: 50
+    max_backups: 10
+    max_age: 1 

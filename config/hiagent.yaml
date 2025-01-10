@@ -1,0 +1,10 @@
+s5Port: 2020
+httpPort: 2021
+url: "broker.askdao.top:1080"
+slat: "c4c9aeb3-c511-4249-929a-01e2abc3e5fe"
+logger:
+    level: info
+    log_file: "../log/hiagent.log"
+    max_size: 50
+    max_backups: 10
+    max_age: 1 
