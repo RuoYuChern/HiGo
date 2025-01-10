@@ -189,7 +189,7 @@ func connecToProxy(s5 *S5Session) quic.Stream {
 	tlsConf := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		MaxVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: false,
 		NextProtos:         []string{"free-go"},
 		ClientSessionCache: tls.NewLRUClientSessionCache(100),
 	}

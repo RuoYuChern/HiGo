@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,24 +22,24 @@ func stopQuic(_ context.Context) {
 }
 
 type SessionPair struct {
-	Remote    net.Conn
-	QLocalCon quic.Connection
-	QLocalStr quic.Stream
+	Remote  net.Conn
+	Local   quic.Connection
+	LStream quic.Stream
 }
 
 func (spr *SessionPair) cleanUp() {
-	if spr.QLocalCon != nil {
-		spr.QLocalCon.CloseWithError(0, "")
+	if spr.Local != nil {
+		spr.Local.CloseWithError(0, "")
 	}
-	if spr.QLocalStr != nil {
-		spr.QLocalStr.Close()
+	if spr.LStream != nil {
+		spr.LStream.Close()
 	}
 	if spr.Remote != nil {
 		spr.Remote.Close()
 	}
 }
 
-func startQuic() error {
+func startQuic(ctx context.Context) error {
 	address := "0.0.0.0:1080"
 	tlsConf := &tls.Config{
 		MinVersion: tls.VersionTLS13,
@@ -62,14 +61,14 @@ func startQuic() error {
 	go func() {
 		base.GLogger.Infof("start quic success:%s", address)
 		for {
-			sess, err := ln.Accept(context.Background())
+			sess, err := ln.Accept(ctx)
 			if err != nil {
 				base.GLogger.Infof("accept quic failed:%s", err.Error())
 				return
 			}
-			spr := &SessionPair{QLocalCon: sess}
+			spr := &SessionPair{Local: sess}
 			go func() {
-				handleSession(spr)
+				handleSession(ctx, spr)
 				spr.cleanUp()
 			}()
 		}
@@ -78,37 +77,26 @@ func startQuic() error {
 	return nil
 }
 
-func handleSession(spr *SessionPair) {
+func handleSession(ctx context.Context, spr *SessionPair) {
 	// 处理 QUIC 会话
 	// 在这里可以执行你的业务逻辑
 	// 例如，接收和发送数据
 	rsp := &base.AuthRsp{}
-	stream, err := spr.QLocalCon.AcceptStream(context.Background())
-	if err != nil {
-		base.GLogger.Infof("accept stream failed:%s", err.Error())
-		rsp.Code = 500
-		rsp.Msg = "accept stream failed"
-		echoQuic(spr.QLocalCon.LocalAddr().String(), rsp, stream)
-		return
-	}
-	// 处理 QUIC 流
-	// 在这里可以执行你的业务逻辑
-	spr.QLocalStr = stream
-	buf := make([]byte, 1024)
-	n, err := stream.Read(buf)
+	lstream, err := spr.Local.AcceptStream(ctx)
 	if err != nil {
 		base.GLogger.Infof("read stream failed:%s", err.Error())
 		rsp.Code = 500
 		rsp.Msg = "read stream failed"
-		echoQuic(spr.QLocalCon.LocalAddr().String(), rsp, stream)
 		return
 	}
-
-	if n < 0 {
-		base.GLogger.Infof("read stream failed:%d", n)
+	spr.LStream = lstream
+	buf := make([]byte, 1024)
+	n, err := spr.LStream.Read(buf)
+	if err != nil {
+		base.GLogger.Infof("read stream failed:%s", err)
 		rsp.Code = 500
 		rsp.Msg = "read stream failed"
-		echoQuic(spr.QLocalCon.LocalAddr().String(), rsp, stream)
+		echoQuic(spr.Local.LocalAddr().String(), rsp, spr.LStream)
 		return
 	}
 
@@ -118,7 +106,7 @@ func handleSession(spr *SessionPair) {
 		base.GLogger.Infof("unmarshal stream failed:%s", err.Error())
 		rsp.Code = 500
 		rsp.Msg = "unmarshal stream failed"
-		echoQuic(spr.QLocalCon.LocalAddr().String(), rsp, stream)
+		echoQuic(spr.Local.LocalAddr().String(), rsp, spr.LStream)
 		return
 	}
 
@@ -128,26 +116,29 @@ func handleSession(spr *SessionPair) {
 		base.GLogger.Infof("Tid:%s, connect to remote failed:%s", dto.Tid, err.Error())
 		rsp.Code = 500
 		rsp.Msg = "connect to remote failed"
-		echoQuic(dto.Tid, rsp, stream)
+		echoQuic(dto.Tid, rsp, spr.LStream)
 		return
 	}
 
 	spr.Remote = remote
 	rsp.Code = 200
 	rsp.Msg = "success"
-	if err := echoQuic(dto.Tid, rsp, stream); err != nil {
+	if err := echoQuic(dto.Tid, rsp, spr.LStream); err != nil {
 		return
 	}
 
 	// 开始代理数据
+	ch := make(chan int)
 	go func() {
 		// 开始代理数据
-		io.Copy(remote, stream)
+		n, _ := io.Copy(spr.Remote, spr.LStream)
+		ch <- int(n)
 	}()
-	io.Copy(stream, remote)
+	io.Copy(spr.LStream, spr.Remote)
+	<-ch
 }
 
-func echoQuic(tid string, rsp *base.AuthRsp, stream quic.Stream) error {
+func echoQuic(tid string, rsp *base.AuthRsp, local quic.Stream) error {
 	// 连接到远程 QUIC 服务器
 	// 发送数据
 	// 接收数据
@@ -156,11 +147,7 @@ func echoQuic(tid string, rsp *base.AuthRsp, stream quic.Stream) error {
 		base.GLogger.Infof("marshal stream failed:%s", err.Error())
 		return err
 	}
-	if buf == nil {
-		base.GLogger.Infof("marshal stream failed:buf is nil")
-		return errors.New("buf is nil")
-	}
-	_, err = stream.Write(buf)
+	_, err = local.Write(buf)
 	if err != nil {
 		base.GLogger.Infof("Tid %s:write stream failed:%s", tid, err.Error())
 		return err

@@ -40,8 +40,10 @@ func main() {
 				return
 			}
 			go func() {
+				log.Printf("handle:%s", local.LocalAddr().String())
 				remote := connectTo(ctx)
 				if remote != nil {
+					log.Printf("connect to remote success:%s", remote.RemoteAddr().String())
 					brokerTo(local, remote, ctx)
 					remote.CloseWithError(0, "")
 				}
@@ -59,7 +61,7 @@ func connectTo(ctx context.Context) quic.Connection {
 	tlsConf := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		MaxVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: false,
 		NextProtos:         []string{"free-go"},
 		ClientSessionCache: tls.NewLRUClientSessionCache(100),
 	}

@@ -23,7 +23,7 @@ func (app *container) Start() error {
 	app.ctx, app.stop = signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	base.GLogger.Info("AppLife startted")
 	startWeb()
-	startQuic()
+	startQuic(app.ctx)
 	return nil
 }
 
