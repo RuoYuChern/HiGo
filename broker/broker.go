@@ -45,10 +45,9 @@ func main() {
 		Certificates: []tls.Certificate{loadCertificates()},
 	}
 	conf := &quic.Config{
-		HandshakeIdleTimeout:    60 * time.Second,
-		MaxIdleTimeout:          5 * time.Second,
-		MaxIncomingStreams:      1000,
-		DisablePathMTUDiscovery: false,
+		HandshakeIdleTimeout: 60 * time.Second,
+		MaxIdleTimeout:       60 * time.Second,
+		MaxIncomingStreams:   1000,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	ln, err := quic.ListenAddr(address, tlsConf, conf)
@@ -95,9 +94,8 @@ func connectTo(ctx context.Context) quic.Connection {
 		ClientSessionCache: tls.NewLRUClientSessionCache(100),
 	}
 	conf := &quic.Config{
-		HandshakeIdleTimeout:    60 * time.Second,
-		MaxIdleTimeout:          5 * time.Second,
-		DisablePathMTUDiscovery: false,
+		HandshakeIdleTimeout: 60 * time.Second,
+		MaxIdleTimeout:       60 * time.Second,
 	}
 	url := "go.askdao.top:1080"
 	remote, err := quic.DialAddr(ctx, url, tlsConf, conf)

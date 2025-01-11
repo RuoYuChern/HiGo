@@ -85,7 +85,8 @@ func conntectToBroker(ctx context.Context) quic.Connection {
 	}
 	conf := &quic.Config{
 		HandshakeIdleTimeout: 60 * time.Second,
-		MaxIdleTimeout:       5 * time.Second,
+		MaxIdleTimeout:       60 * time.Second,
+		KeepAlivePeriod:      30 * time.Second,
 	}
 
 	conn, err := quic.DialAddr(ctx, gConf.Url, tlsConf, conf)
@@ -96,8 +97,12 @@ func conntectToBroker(ctx context.Context) quic.Connection {
 	return conn
 }
 
-func isInternalIP(ip string) bool {
+func isInternalIP(atyp byte, ip string) bool {
 	// 解析IP地址
+	if atyp == 0x03 {
+		return false
+	}
+
 	addr := net.ParseIP(ip)
 	if addr == nil {
 		return false
@@ -108,8 +113,8 @@ func isInternalIP(ip string) bool {
 func handleS5Conn(ctx context.Context, s5 *S5Session) error {
 	// 读取客户端发送的版本号和认证方法数量
 	buf := make([]byte, 257)
-	_, err := io.ReadFull(s5.local, buf[:2])
-	if err != nil {
+	n, err := io.ReadFull(s5.local, buf[:2])
+	if (err != nil) && (n < 2) {
 		base.GLogger.Infof("Tid:%s, Failed to read version and method count: %v", s5.tid, err)
 		return err
 	}
@@ -187,8 +192,9 @@ func handleS5Conn(ctx context.Context, s5 *S5Session) error {
 	port := int(buf[0])<<8 | int(buf[1])
 	s5.addr = addr
 	s5.port = port
+
 	// 检查是否为内网IP
-	if isInternalIP(addr) {
+	if isInternalIP(atyp, addr) {
 		return errors.New("internal IP address")
 	}
 
