@@ -12,6 +12,28 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
+type Session struct {
+	lcon quic.Connection
+	rcon quic.Connection
+	lstr quic.Stream
+	rstr quic.Stream
+}
+
+func (s *Session) close() {
+	if s.lcon != nil {
+		s.lcon.CloseWithError(0, "")
+	}
+	if s.rcon != nil {
+		s.rcon.CloseWithError(0, "")
+	}
+	if s.lstr != nil {
+		s.lstr.Close()
+	}
+	if s.rstr != nil {
+		s.rstr.Close()
+	}
+}
+
 func main() {
 	address := "0.0.0.0:1080"
 	tlsConf := &tls.Config{
@@ -24,13 +46,15 @@ func main() {
 	conf := &quic.Config{
 		HandshakeIdleTimeout: 60 * time.Second,
 		MaxIdleTimeout:       60 * time.Second,
+		MaxIncomingStreams:   300,
 	}
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	ln, err := quic.ListenAddr(address, tlsConf, conf)
 	if err != nil {
 		log.Fatalf("start quic failed:%s", err.Error())
 		return
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		log.Printf("start quic success:%s", address)
 		for {
@@ -39,15 +63,12 @@ func main() {
 				log.Printf("accept quic failed:%s", err.Error())
 				return
 			}
+			sess := &Session{lcon: local}
 			go func() {
 				log.Printf("handle:%s", local.LocalAddr().String())
-				remote := connectTo(ctx)
-				if remote != nil {
-					log.Printf("connect to remote success:%s", remote.RemoteAddr().String())
-					brokerTo(local, remote, ctx)
-					remote.CloseWithError(0, "")
-				}
-				local.CloseWithError(0, "")
+				sess.rcon = connectTo(ctx)
+				brokerTo(ctx, sess)
+				sess.close()
 			}()
 		}
 	}()
@@ -61,7 +82,7 @@ func connectTo(ctx context.Context) quic.Connection {
 	tlsConf := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		MaxVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: true,
 		NextProtos:         []string{"free-go"},
 		ClientSessionCache: tls.NewLRUClientSessionCache(100),
 	}
@@ -69,6 +90,7 @@ func connectTo(ctx context.Context) quic.Connection {
 		HandshakeIdleTimeout: 60 * time.Second,
 		MaxIdleTimeout:       60 * time.Second,
 		KeepAlivePeriod:      10 * time.Second,
+		MaxIncomingStreams:   300,
 	}
 	url := "go.askdao.top:1080"
 	remote, err := quic.DialAddr(ctx, url, tlsConf, conf)
@@ -79,21 +101,40 @@ func connectTo(ctx context.Context) quic.Connection {
 	return remote
 }
 
-func brokerTo(local, remote quic.Connection, ctx context.Context) {
-	localStream, err := local.OpenStreamSync(ctx)
+func brokerTo(ctx context.Context, sess *Session) {
+	if sess.rcon == nil {
+		return
+	}
+
+	lstr, err := sess.lcon.AcceptStream(ctx)
 	if err != nil {
 		log.Fatalf("open stream failed:%s", err.Error())
 		return
 	}
-	remoteStream, err := remote.AcceptStream(ctx)
+	sess.lstr = lstr
+
+	rstr, err := sess.rcon.OpenStreamSync(ctx)
 	if err != nil {
 		log.Fatalf("accept stream failed:%s", err.Error())
 		return
 	}
+	sess.rstr = rstr
+
+	ch := make(chan int)
 	go func() {
-		io.Copy(localStream, remoteStream)
+		_, err = io.Copy(sess.rstr, sess.lstr)
+		if err != nil {
+			log.Fatalf("copy from local failed:%s", err.Error())
+		}
+		ch <- 1
 	}()
-	io.Copy(remoteStream, localStream)
+	n, err := io.Copy(sess.lstr, sess.rstr)
+	<-ch
+	if err != nil {
+		log.Fatalf("copy to local failed:%s", err.Error())
+		return
+	}
+	log.Printf("copy %d", n)
 }
 
 func loadCertificates() tls.Certificate {

@@ -22,20 +22,20 @@ func stopQuic(_ context.Context) {
 }
 
 type SessionPair struct {
-	Remote  net.Conn
-	Local   quic.Connection
-	LStream quic.Stream
+	rcon net.Conn
+	lcon quic.Connection
+	lstr quic.Stream
 }
 
 func (spr *SessionPair) cleanUp() {
-	if spr.Local != nil {
-		spr.Local.CloseWithError(0, "")
+	if spr.lcon != nil {
+		spr.lcon.CloseWithError(0, "")
 	}
-	if spr.LStream != nil {
-		spr.LStream.Close()
+	if spr.lstr != nil {
+		spr.lstr.Close()
 	}
-	if spr.Remote != nil {
-		spr.Remote.Close()
+	if spr.rcon != nil {
+		spr.rcon.Close()
 	}
 }
 
@@ -66,7 +66,7 @@ func startQuic(ctx context.Context) error {
 				base.GLogger.Infof("accept quic failed:%s", err.Error())
 				return
 			}
-			spr := &SessionPair{Local: sess}
+			spr := &SessionPair{lcon: sess}
 			go func() {
 				handleSession(ctx, spr)
 				spr.cleanUp()
@@ -82,21 +82,22 @@ func handleSession(ctx context.Context, spr *SessionPair) {
 	// 在这里可以执行你的业务逻辑
 	// 例如，接收和发送数据
 	rsp := &base.AuthRsp{}
-	lstream, err := spr.Local.AcceptStream(ctx)
+	lstr, err := spr.lcon.AcceptStream(ctx)
 	if err != nil {
 		base.GLogger.Infof("read stream failed:%s", err.Error())
 		rsp.Code = 500
 		rsp.Msg = "read stream failed"
 		return
 	}
-	spr.LStream = lstream
+	spr.lstr = lstr
+
 	buf := make([]byte, 1024)
-	n, err := spr.LStream.Read(buf)
+	n, err := spr.lstr.Read(buf)
 	if err != nil {
 		base.GLogger.Infof("read stream failed:%s", err)
 		rsp.Code = 500
 		rsp.Msg = "read stream failed"
-		echoQuic(spr.Local.LocalAddr().String(), rsp, spr.LStream)
+		echoQuic(spr.lcon.LocalAddr().String(), rsp, spr.lstr)
 		return
 	}
 
@@ -106,7 +107,7 @@ func handleSession(ctx context.Context, spr *SessionPair) {
 		base.GLogger.Infof("unmarshal stream failed:%s", err.Error())
 		rsp.Code = 500
 		rsp.Msg = "unmarshal stream failed"
-		echoQuic(spr.Local.LocalAddr().String(), rsp, spr.LStream)
+		echoQuic(spr.lcon.LocalAddr().String(), rsp, spr.lstr)
 		return
 	}
 
@@ -116,14 +117,14 @@ func handleSession(ctx context.Context, spr *SessionPair) {
 		base.GLogger.Infof("Tid:%s, connect to remote failed:%s", dto.Tid, err.Error())
 		rsp.Code = 500
 		rsp.Msg = "connect to remote failed"
-		echoQuic(dto.Tid, rsp, spr.LStream)
+		echoQuic(dto.Tid, rsp, spr.lstr)
 		return
 	}
 
-	spr.Remote = remote
+	spr.rcon = remote
 	rsp.Code = 200
 	rsp.Msg = "success"
-	if err := echoQuic(dto.Tid, rsp, spr.LStream); err != nil {
+	if err := echoQuic(dto.Tid, rsp, spr.lstr); err != nil {
 		return
 	}
 
@@ -131,10 +132,10 @@ func handleSession(ctx context.Context, spr *SessionPair) {
 	ch := make(chan int)
 	go func() {
 		// 开始代理数据
-		n, _ := io.Copy(spr.Remote, spr.LStream)
+		n, _ := io.Copy(spr.rcon, spr.lstr)
 		ch <- int(n)
 	}()
-	io.Copy(spr.LStream, spr.Remote)
+	io.Copy(spr.lstr, spr.rcon)
 	<-ch
 }
 

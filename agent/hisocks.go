@@ -19,19 +19,23 @@ var s5Server net.Listener
 const socks5Ver = uint8(5)
 
 type S5Session struct {
-	local  net.Conn
-	remote quic.Stream
-	tid    string
-	addr   string
-	port   int
+	local net.Conn
+	bstr  quic.Stream
+	brcon quic.Connection
+	tid   string
+	addr  string
+	port  int
 }
 
 func (s5 *S5Session) close() {
 	if s5.local != nil {
 		s5.local.Close()
 	}
-	if s5.remote != nil {
-		s5.remote.Close()
+	if s5.bstr != nil {
+		s5.bstr.Close()
+	}
+	if s5.brcon != nil {
+		s5.brcon.CloseWithError(0, "")
 	}
 }
 
@@ -41,7 +45,7 @@ func stopS5() {
 		s5Server = nil
 	}
 }
-func startS5(_ context.Context) error {
+func startS5(ctx context.Context) error {
 	srv, err := net.Listen("tcp", fmt.Sprintf(":%d", gConf.S5Port))
 	if err != nil {
 		base.GLogger.Infof("start s5 failed:%s", err.Error())
@@ -61,17 +65,36 @@ func startS5(_ context.Context) error {
 			seq++
 			s5 := &S5Session{local: conn, tid: fmt.Sprintf("SEQ-%s-%d", uid, seq)}
 			go func() {
-				if handleS5Conn(s5) != nil {
-					s5.close()
-					return
+				if handleS5Conn(ctx, s5) == nil {
+					handleS5Forward(s5)
 				}
-				handleS5Forward(s5)
 				s5.close()
 			}()
 		}
 	}()
 	return nil
+}
 
+func conntectToBroker(ctx context.Context) quic.Connection {
+	tlsConf := &tls.Config{
+		MinVersion:         tls.VersionTLS13,
+		MaxVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: false,
+		NextProtos:         []string{"free-go"},
+		ClientSessionCache: tls.NewLRUClientSessionCache(100),
+	}
+	conf := &quic.Config{
+		HandshakeIdleTimeout: 60 * time.Second,
+		MaxIdleTimeout:       60 * time.Second,
+		KeepAlivePeriod:      10 * time.Second,
+	}
+
+	conn, err := quic.DialAddr(ctx, gConf.Url, tlsConf, conf)
+	if err != nil {
+		base.GLogger.Infof("Connect to %s failed:%s", gConf.Url, err.Error())
+		return nil
+	}
+	return conn
 }
 
 func isInternalIP(ip string) bool {
@@ -83,7 +106,7 @@ func isInternalIP(ip string) bool {
 	return (addr.IsPrivate() || addr.IsLoopback())
 }
 
-func handleS5Conn(s5 *S5Session) error {
+func handleS5Conn(ctx context.Context, s5 *S5Session) error {
 	// 读取客户端发送的版本号和认证方法数量
 	buf := make([]byte, 257)
 	_, err := io.ReadFull(s5.local, buf[:2])
@@ -170,12 +193,12 @@ func handleS5Conn(s5 *S5Session) error {
 		return errors.New("internal IP address")
 	}
 
-	sse := connecToProxy(s5)
+	sse := connecToProxy(ctx, s5)
 	if sse == nil {
 		base.GLogger.Infof("Tid:%s, Failed to connect to target %s", s5.tid, s5.addr)
 		return errors.New("failed to connect to proxy")
 	}
-	s5.remote = sse
+	s5.bstr = sse
 	// 回复客户端连接成功
 	_, err = s5.local.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 	if err != nil {
@@ -185,31 +208,18 @@ func handleS5Conn(s5 *S5Session) error {
 	return nil
 }
 
-func connecToProxy(s5 *S5Session) quic.Stream {
-	tlsConf := &tls.Config{
-		MinVersion:         tls.VersionTLS13,
-		MaxVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: false,
-		NextProtos:         []string{"free-go"},
-		ClientSessionCache: tls.NewLRUClientSessionCache(100),
-	}
-	conf := &quic.Config{
-		HandshakeIdleTimeout: 60 * time.Second,
-		MaxIdleTimeout:       60 * time.Second,
-		KeepAlivePeriod:      10 * time.Second,
-	}
-
-	conn, err := quic.DialAddr(context.Background(), gConf.Url, tlsConf, conf)
-	if err != nil {
-		base.GLogger.Infof("Tid:%s, connect to %s failed:%s", s5.tid, gConf.Url, err.Error())
+func connecToProxy(ctx context.Context, s5 *S5Session) quic.Stream {
+	s5.brcon = conntectToBroker(ctx)
+	if s5.brcon == nil {
 		return nil
 	}
-	stream, err := conn.OpenStreamSync(context.Background())
+	bstr, err := s5.brcon.OpenStreamSync(ctx)
 	if err != nil {
 		base.GLogger.Infof("Tid:%s, create stream failed:%s", s5.tid, err.Error())
-		conn.CloseWithError(0, "")
 		return nil
 	}
+	s5.bstr = bstr
+
 	auth := base.AuthDto{
 		User:   "amos",
 		Port:   s5.port,
@@ -217,37 +227,37 @@ func connecToProxy(s5 *S5Session) quic.Stream {
 		Tid:    s5.tid,
 	}
 	authStr, _ := json.Marshal(auth)
-	_, err = stream.Write(authStr)
+	_, err = bstr.Write(authStr)
 	if err != nil {
 		base.GLogger.Infof("Tid:%s, write stream failed:%s", s5.tid, err.Error())
-		conn.CloseWithError(0, "")
 		return nil
 	}
 	buf := make([]byte, 256)
-	n, err := stream.Read(buf)
+	n, err := bstr.Read(buf)
 	if err != nil {
 		base.GLogger.Infof("Tid:%s, read stream failed:%s", s5.tid, err.Error())
-		conn.CloseWithError(0, "")
 		return nil
 	}
 	rsp := base.AuthRsp{}
 	err = json.Unmarshal(buf[:n], &rsp)
 	if err != nil {
 		base.GLogger.Infof("Tid:%s, Unmarshal stream failed:%s", s5.tid, err.Error())
-		conn.CloseWithError(0, "")
 		return nil
 	}
 	if rsp.Code != 200 {
 		base.GLogger.Infof("Tid:%s, Connect stream failed:%s", s5.tid, rsp.Msg)
-		conn.CloseWithError(0, "")
 		return nil
 	}
-	s5.remote = stream
-	return stream
+	return bstr
 }
 
 func handleS5Forward(s5 *S5Session) {
 	// 开始代理数据
-	go io.Copy(s5.remote, s5.local)
-	io.Copy(s5.local, s5.remote)
+	ch := make(chan int)
+	go func() {
+		io.Copy(s5.bstr, s5.local)
+		ch <- 1
+	}()
+	io.Copy(s5.local, s5.bstr)
+	<-ch
 }
