@@ -85,8 +85,7 @@ func conntectToBroker(ctx context.Context) quic.Connection {
 	}
 	conf := &quic.Config{
 		HandshakeIdleTimeout: 60 * time.Second,
-		MaxIdleTimeout:       60 * time.Second,
-		KeepAlivePeriod:      10 * time.Second,
+		MaxIdleTimeout:       5 * time.Second,
 	}
 
 	conn, err := quic.DialAddr(ctx, gConf.Url, tlsConf, conf)

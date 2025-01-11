@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"log"
 	"os/signal"
@@ -44,16 +45,23 @@ func main() {
 		Certificates: []tls.Certificate{loadCertificates()},
 	}
 	conf := &quic.Config{
-		HandshakeIdleTimeout: 60 * time.Second,
-		MaxIdleTimeout:       60 * time.Second,
-		MaxIncomingStreams:   300,
+		HandshakeIdleTimeout:    60 * time.Second,
+		MaxIdleTimeout:          5 * time.Second,
+		MaxIncomingStreams:      1000,
+		DisablePathMTUDiscovery: false,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	ln, err := quic.ListenAddr(address, tlsConf, conf)
 	if err != nil {
-		log.Fatalf("start quic failed:%s", err.Error())
+		log.Printf("start quic failed:%s", err.Error())
 		return
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic:", r)
+		}
+	}()
 
 	go func() {
 		log.Printf("start quic success:%s", address)
@@ -87,15 +95,14 @@ func connectTo(ctx context.Context) quic.Connection {
 		ClientSessionCache: tls.NewLRUClientSessionCache(100),
 	}
 	conf := &quic.Config{
-		HandshakeIdleTimeout: 60 * time.Second,
-		MaxIdleTimeout:       60 * time.Second,
-		KeepAlivePeriod:      10 * time.Second,
-		MaxIncomingStreams:   300,
+		HandshakeIdleTimeout:    60 * time.Second,
+		MaxIdleTimeout:          5 * time.Second,
+		DisablePathMTUDiscovery: false,
 	}
 	url := "go.askdao.top:1080"
 	remote, err := quic.DialAddr(ctx, url, tlsConf, conf)
 	if err != nil {
-		log.Fatalf("connect to remote failed:%s", err.Error())
+		log.Printf("connect to remote failed:%s", err.Error())
 		return nil
 	}
 	return remote
@@ -105,17 +112,16 @@ func brokerTo(ctx context.Context, sess *Session) {
 	if sess.rcon == nil {
 		return
 	}
-
 	lstr, err := sess.lcon.AcceptStream(ctx)
 	if err != nil {
-		log.Fatalf("open stream failed:%s", err.Error())
+		log.Printf("open stream failed:%s", err.Error())
 		return
 	}
 	sess.lstr = lstr
 
 	rstr, err := sess.rcon.OpenStreamSync(ctx)
 	if err != nil {
-		log.Fatalf("accept stream failed:%s", err.Error())
+		log.Printf("accept stream failed:%s", err.Error())
 		return
 	}
 	sess.rstr = rstr
@@ -124,14 +130,14 @@ func brokerTo(ctx context.Context, sess *Session) {
 	go func() {
 		_, err = io.Copy(sess.rstr, sess.lstr)
 		if err != nil {
-			log.Fatalf("copy from local failed:%s", err.Error())
+			log.Printf("copy from local failed:%s", err.Error())
 		}
 		ch <- 1
 	}()
 	n, err := io.Copy(sess.lstr, sess.rstr)
 	<-ch
 	if err != nil {
-		log.Fatalf("copy to local failed:%s", err.Error())
+		log.Printf("copy to local failed:%s", err.Error())
 		return
 	}
 	log.Printf("copy %d", n)
@@ -143,7 +149,7 @@ func loadCertificates() tls.Certificate {
 	key := "../config/broker.askdao.top.key"
 	cert, err := tls.LoadX509KeyPair(crt, key)
 	if err != nil {
-		log.Fatalf("Failed to load certificates: %v", err)
+		log.Printf("Failed to load certificates: %v", err)
 	}
 	return cert
 }

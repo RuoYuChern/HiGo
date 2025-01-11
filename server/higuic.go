@@ -49,8 +49,10 @@ func startQuic(ctx context.Context) error {
 		Certificates: []tls.Certificate{loadCertificates()},
 	}
 	conf := &quic.Config{
-		HandshakeIdleTimeout: 60 * time.Second,
-		MaxIdleTimeout:       60 * time.Second,
+		HandshakeIdleTimeout:    60 * time.Second,
+		MaxIdleTimeout:          5 * time.Second,
+		DisablePathMTUDiscovery: false,
+		MaxIncomingStreams:      1000,
 	}
 	ln, err := quic.ListenAddr(address, tlsConf, conf)
 	guicLn = ln
