@@ -14,6 +14,21 @@ import (
 	"taiji666.top/higo/base"
 )
 
+const (
+	Version byte = 0x05
+
+	MethodNoAuth byte = 0x00
+	MethodAuth   byte = 0x02
+	MethodNone   byte = 0xFF
+
+	CmdConnect      byte = 0x01
+	CmdUdpAssociate byte = 0x03
+
+	ATYPIPv4   byte = 0x01
+	ATYPDomain byte = 0x03
+	ATYPIPv6   byte = 0x04
+)
+
 var s5Server net.Listener
 
 const socks5Ver = uint8(5)
@@ -60,7 +75,7 @@ func startS5(ctx context.Context) error {
 			conn, err := s5Server.Accept()
 			if err != nil {
 				fmt.Println("accept failed:", err)
-				continue
+				break
 			}
 			seq++
 			s5 := &S5Session{local: conn, tid: fmt.Sprintf("SEQ-%s-%d", uid, seq)}
@@ -99,7 +114,7 @@ func conntectToBroker(ctx context.Context) quic.Connection {
 
 func isInternalIP(atyp byte, ip string) bool {
 	// 解析IP地址
-	if atyp == 0x03 {
+	if atyp == ATYPDomain {
 		return false
 	}
 
@@ -150,14 +165,14 @@ func handleS5Conn(ctx context.Context, s5 *S5Session) error {
 
 	var addr string
 	switch atyp {
-	case 0x01: // IPv4
+	case ATYPIPv4: // IPv4
 		_, err = io.ReadFull(s5.local, buf[:4])
 		if err != nil {
 			base.GLogger.Infof("Tid:%s, Failed to read IPv4 address: %v", s5.tid, err)
 			return err
 		}
 		addr = fmt.Sprintf("%d.%d.%d.%d", buf[0], buf[1], buf[2], buf[3])
-	case 0x03: // 域名
+	case ATYPDomain: // 域名
 		_, err = io.ReadFull(s5.local, buf[:1])
 		if err != nil {
 			base.GLogger.Infof("Tid:%s, Failed to read domain length: %v", s5.tid, err)
@@ -170,7 +185,7 @@ func handleS5Conn(ctx context.Context, s5 *S5Session) error {
 			return err
 		}
 		addr = string(buf[:domainLen])
-	case 0x04: // IPv6
+	case ATYPIPv6: // IPv6
 		_, err = io.ReadFull(s5.local, buf[:16])
 		if err != nil {
 			base.GLogger.Infof("Tid:%s, Failed to read IPv6 address: %v", s5.tid, err)
