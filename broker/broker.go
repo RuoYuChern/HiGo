@@ -72,7 +72,6 @@ func main() {
 			}
 			sess := &Session{lcon: local}
 			go func() {
-				log.Printf("handle:%s", local.LocalAddr().String())
 				sess.rcon = connectTo(ctx)
 				brokerTo(ctx, sess)
 				sess.close()
@@ -126,19 +125,19 @@ func brokerTo(ctx context.Context, sess *Session) {
 
 	ch := make(chan int)
 	go func() {
-		_, err = io.Copy(sess.rstr, sess.lstr)
-		if err != nil {
+		n, err := io.Copy(sess.rstr, sess.lstr)
+		if (err != nil) && (err != io.EOF) && (n <= 0) {
 			log.Printf("copy from local failed:%s", err.Error())
 		}
 		ch <- 1
 	}()
 	n, err := io.Copy(sess.lstr, sess.rstr)
 	<-ch
-	if err != nil {
+	if (err != nil) && (err != io.EOF) && (n <= 0) {
 		log.Printf("copy to local failed:%s", err.Error())
 		return
 	}
-	log.Printf("copy %d", n)
+	log.Printf("handle:%s, msgLen:%d", sess.lcon.LocalAddr().String(), n)
 }
 
 func loadCertificates() tls.Certificate {

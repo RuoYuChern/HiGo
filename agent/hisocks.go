@@ -61,13 +61,13 @@ func stopS5() {
 	}
 }
 func startS5(ctx context.Context) error {
-	srv, err := net.Listen("tcp", fmt.Sprintf(":%d", gConf.S5Port))
+	srv, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", gConf.S5Port))
 	if err != nil {
 		base.GLogger.Infof("start s5 failed:%s", err.Error())
 		return err
 	}
 	s5Server = srv
-	fmt.Printf("Socks5 proxy server is running on 127.0.0.1:%d", gConf.S5Port)
+	fmt.Printf("Socks5 proxy server is running on %s", srv.Addr().String())
 	uid := base.GenerateRandomString(5)
 	seq := 0
 	go func() {
