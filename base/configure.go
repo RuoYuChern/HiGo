@@ -20,6 +20,7 @@ type HiAgentConf struct {
 	S5Port int       `yaml:"s5Port"`
 	HPort  int       `yaml:"httpPort"`
 	Url    string    `yaml:"url"`
+	WUrl   string    `yaml:"wurl"`
 	Log    HiLogConf `yaml:"logger"`
 }
 
